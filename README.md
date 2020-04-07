@@ -38,7 +38,11 @@ You can use this as a base if you want to import the source files manually.
 ## System Requirements:
 Python 3.7 or later
 
-Python Image Library (PIL)  5.4.1
+[Python Image Library (PIL)  5.4.1](https://pillow.readthedocs.io/en/5.1.x/installation.html)
+
+[Numpy 1.18.2](https://www.numpy.org)
+
+[Blend_Modes 2.1.0](https://github.com/flrs/blend_modes)
 
 The SteamVR Workshop Tools (you do not need VR to run these!)
 
