@@ -6,9 +6,11 @@ This is a 3rd generation fork, first created by Rectus and then Forked by DankPa
 
 Below is a list of branches that have been tested with the tool:
 - Source Filmmaker Branch (most content from this build is stable and should work nicely.)
+  - Half-Life 2
 
 Below is a list of branches that DON'T work with this tool (in SteamVR):
 - Left 4 Dead 2 (most content works, but player models crash the engine.)
+- Half-Life 2 (seems to crash on most models)
 
 ## vmt_to_vmat.py
 
