@@ -34,36 +34,40 @@ import os
 import os.path
 from os import path
 import re
+from shutil import copyfile
 
 from PIL import Image
 import PIL.ImageOps
 
-import numpy as np
-from blend_modes import blending_functions
+#import numpy as np
+#from blend_modes import blending_functions
 
+#for the future
 #from VTFLibWrapper.VTFLibEnums import ImageFlag
 #from VTFLibWrapper import VTFLib
 #from VTFLibWrapper import VTFLibEnums
 #vtf_lib = VTFLib.VTFLib()
 
-# What shader to use.
-SHADER = 'vr_standard'
 # File format of the textures.
 TEXTURE_FILEEXT = '.tga'
-# Set this to True if you wish to overwrite your old vmat files
-OVERWRITE_VMAT = True
+# Extension added to the end of the target folder for these new materials. Valve uses _imported, so we're using it here too
+TARGET_FOLDER_EXTENSION = "_imported"
 # For some reason, VR Complex doesn't have proper pbr support (as in no support for reflectivity maps or glossiness)
 # Because of this, we are just hacking so when compiling for VR_Complex, we set this to true
 PBR_HACK = False
 # A lot of looks for Source games seem to hinge on Reflectance Range being correct, so for now, we're making
 # a seperate variable for it to make it easier to modify on a per-game basis. HL2 seems to be 0.5
 reflRange = 0.5
+# If the user wishes, they can also generate .vmats for tools files (so debug, tools, dev, etc.) but usually this
+# causes compatibility issues since S2 already has it's own versions.
+skipDebugFiles = True
 
-filePath = sys.argv[1]
+debugPauseOnError = False   #
+
 modPath = ""
 
 # material types need to be lowercase because python is a bit case sensitive
-# TODO: later, we will convert these to be in a dictionary with the following format
+# TODO: later, we will convert these to be in a dictionary with something like
 # "shaderName": ("HLATargetShader", "SVRHTargetShader", "DOTATargetShader"),
 # We will also have a flag for HLA, SVRH (steamtours), and DOTA)
 # For now though, just pretend everything uses TextureColor and fuck everything else
@@ -171,14 +175,17 @@ class RGBAImage:
 def parseDir(dirName):
     files = []
     for root, dirs, fileNames in os.walk(dirName):
+        if not os.path.exists(addFolderExtension(root)):
+            print(" + Target Directory not found for folder " + os.path.basename(root) + ". Creating!")
+            os.makedirs(addFolderExtension(root))
         for fileName in fileNames:
             if fileName.lower().endswith('.vmt'):
                 files.append(os.path.join(root,fileName))
-
     return files
 
 def parseLine(inputString):
-    inputString = inputString.lower().replace('"', '').replace("'", "").replace("\n", "").replace("\t", "")
+    #TODO: REGEX????
+    inputString = inputString.lower().replace('"', '').replace("'", "").replace("\n", "").replace("\t", "").replace("{", "").replace("}", "").replace(" ", "")
     return inputString
 
 def fixTexturePath(p, addonString = ""):
@@ -189,7 +196,7 @@ def fixTexturePath(p, addonString = ""):
     return retPath
 
 def fixVector(s, divVar = 1):
-    s = s.strip('"][}{ ') # some VMT vectors use {}
+    s = s.strip('"][}{ ').strip("'").replace("  ", " ").replace("   ", " ") # some VMT vectors use {}
     parts = [str(float(i) / divVar) for i in s.split(' ')]
     extra = (' 0.0' * max(3 - s.count(' '), 0) )
     return '"[' + ' '.join(parts) + extra + ']"'
@@ -209,6 +216,14 @@ def text_parser(filepath, separator="="):
                 line = line.split(separator)
                 return_dict[line[0]] = line[1]
     return return_dict
+
+def parseVMTPath(inputPath):
+    inputPath = inputPath.lower().replace(".vtf", "")
+    return inputPath
+
+def addFolderExtension(filePath):
+    outPath = filePath.split('\\materials')[0] + TARGET_FOLDER_EXTENSION + "\\materials" + filePath.split('materials')[1]
+    return outPath
 
 ###
 ### Big Functions
@@ -238,99 +253,125 @@ def parseVMTParameter(line, parameters):
 
     commentTuple = val.partition('//')
 
-    if(val.strip('"' + "'") == ""):
-        print("+ No value found, moving on")
+    if (val.strip('"' + "'") == ""):
+        print("+ WARNING: No value found in parameter " + key + ", skipping!")
+        return
+    # So I chose this to be simple in code later, so I don't have to check if a value exists in vmtParameters AND check it's value
+    # But, this should be fine cuz .vmt seems to treat any 0 values as the default parameter. If there's a value out there though
+    # that relies on 0, we can add it here as an exception.
+    if (val.strip('"' + "'") == "0"):
+        print("+ WARNING: Value of " + key + " found to be 0, skipping!")
         return
 
     if not commentTuple[0] in parameters:
+        #TODO: Tidy this up with regex
         parameters[key] = commentTuple[0].replace("'", "").replace('"', '').replace("\n", "").replace("\t", "")
         # reports back as dict with the format $basetexture models/alyx/alyx_faceandhair
-
-def getVmatParameter(key, val):
-    key = key.strip('$').lower()
-
-    # Dict for converting parameters
-    convert = {
-        #VMT paramter: VMAT parameter, value, additional lines to add. The last two variables take functions or strings, or None for using the old value.
-        'basetexture': ('TextureColor', fixTexturePath, None),
-        'basetexture2': ('TextureLayer1Color', fixTexturePath, None),
-        'bumpmap': ('TextureNormal', fixTexturePath, None),
-        'normalmap': ('TextureNormal', fixTexturePath, None),
-        'envmap': ('F_SPECULAR', '1', '\tF_SPECULAR_CUBE_MAP 1\n\tF_SPECULAR_CUBE_MAP_PROJECTION 1\n\tg_flCubeMapBlurAmount "1.000"\n\tg_flCubeMapScalar "1.000"\n'), #Assumes env_cubemap
-        #'envmaptint': ('TextureReflectance', fixVector, None),
-        'envmapmask': ('TextureReflectance', fixTexturePath, None),
-        'color': ('g_vColorTint', None, None), #Assumes being used with basetexture
-        'selfillum': ('g_flSelfIllumScale', '"1.000"', None),
-        'selfillumtint': ('g_vSelfIllumTint', None, None),
-        'selfillummask': ('TextureSelfIllumMask', fixTexturePath, None),
-        'phongexponenttexture': ('TextureGlossiness', fixTexturePath, None),
-        'translucent': ('F_TRANSLUCENT', None, '\tg_flOpacityScale "1.000"\n'),
-        'additive': ('F_ADDITIVE_BLEND', None, None),
-        'nocull': ('F_RENDER_BACKFACES', None, None),
-        'decal':( 'F_OVERLAY', None, None),
-		}
-
-    if key in convert:
-        outValue = val
-        additionalLines = ''
-
-        if isinstance(convert[key][1], str):
-            outValue = convert[key][1]
-        elif hasattr(convert[key][1], '__call__'):
-            outValue = convert[key][1](val)
-
-        if isinstance(convert[key][2], str):
-            additionalLines = convert[key][2]
-        elif hasattr(convert[key][2], '__call__'):
-            additionalLines = convert[key][2](val)
-
-        '''if isinstance(convert[key][3], bool):
-            if(val.replace('"', '') == "0" or val.replace('"', '') == "false"):
-                return ''
-        elif hasattr(convert[key][3], '__call__'):
-            print("Error: no bool at the end of dict!!")
-            return ''
-            '''
-
-        return '\t' + convert[key][0] + ' ' + outValue + '\n' + additionalLines
-
-    return ''
 
 ###
 ### Main Execution
 ###
 
-print('--------------------------------------------------------------------------------------------------------\nSource 2 Material Conveter! By Rectus via Github.\nInitially forked by Alpyne, this version by caseytube.\n--------------------------------------------------------------------------------------------------------')
+print('--------------------------------------------------------------------------------------------------------\n'
+      'Source 2 Material Conveter! By Rectus via Github.\nInitially forked by Alpyne, this version by caseytube.\n'
+      '--------------------------------------------------------------------------------------------------------\n')
+print(" + As a reminder, please extract all of your .vtfs to .tga using VTFEdit's 'Convert Folder' before running! + \n")
+# Start by asking some basic questions
+yes = {'yes','y', 'ye'}
+no = {'no','n', ''}
+validS2Shaders = {'vr_complex','vr_standard'}
+convertVTFs = False
+
+targetFolder = input("What folder would you like to convert? Valid Format: C:\\Steam\\steamapps\\Half-Life Alyx\\content\\tf: ").lower()
+if not os.path.exists(targetFolder):
+    print("Please respond with a valid folder or file path! Quitting Process!")
+    quit()
+
+overwriteInput = input("Would you like to overwrite any existing .vmat files? (y/n): ").lower()
+if overwriteInput in yes:
+    OVERWRITE_VMAT = True
+elif overwriteInput in no:
+    OVERWRITE_VMAT = False
+elif overwriteInput == "": # debug: casey's favorite default value
+    OVERWRITE_VMAT = True
+else:
+    print("Please respond with 'yes' or 'no.' Quitting process!")
+    quit()
+
+overwriteTGAInput = input("Would you like to overwrite any existing .tga files? (y/n): ").lower()
+if overwriteTGAInput in yes:
+    OVERWRITE_TGA = True
+elif overwriteTGAInput in no:
+    OVERWRITE_TGA = False
+elif overwriteTGAInput == "": # debug: casey's favorite default value
+    OVERWRITE_TGA = False
+else:
+    print("Please respond with 'yes' or 'no.' Quitting process!")
+    quit()
+
+'''convertInput = input("Would you like to convert .vtf files to .tga? (y/n): ").lower()
+if convertInput in yes:
+    convertVTFs = True
+elif convertInput in no:
+    convertVTFs = False
+elif convertInput == "": # debug: casey's favorite default value
+    convertVTFs = False
+else:
+    print("Please respond with 'yes' or 'no.' Quitting process!")
+    quit()'''
+
+SHADER = input("What is your target shader? Valid Options: vr_complex (vr_standard support coming soon) - ").lower()
+if SHADER == "":
+    SHADER = "vr_complex"
+elif SHADER not in validS2Shaders:
+    print("Please respond with a valid shader! Quitting process!")
+    quit()
 
 # Verify file paths
 fileList = []
+vtfList = []
 
 # HACK; See note under PBR_HACK
 if SHADER.lower() == "vr_complex":
     PBR_HACK = True
 
-if(len(sys.argv) == 2):
-    absFilePath = os.path.abspath(filePath)
+# TODO: make this work so that when parsing directories, skip tools/debug stuff
+foldersToSkip = [
+    "materials\\tools",
+    "materials\\debug"
+]
+
+if(targetFolder):
+    absFilePath = os.path.abspath(targetFolder)
     if os.path.isdir(absFilePath):
         fileList.extend(parseDir(absFilePath))
     elif(absFilePath.lower().endswith('.vmt')):
         fileList.append(absFilePath)
+    elif(absFilePath.lower().endswith('.vtf')):
+        vtfList.append(absFilePath)
     else:
-        print("ERROR: File path is invalid. required format: vmt_to_vmat.py C:\optional\path\to\root")
+        print('ERROR: File path is invalid. required format: "vmt_to_vmat.py C:\\path\\to\\folder_or_vmt"')
         quit()
 else:
-    print("ERROR: CMD Arguments are invalid. Required format: vmt_to_vmat.py C:\optional\path\to\root")
+    print('ERROR: CMD Arguments are invalid. Required format: "vmt_to_vmat.py C:\\path\\to\\folder_or_vmt"')
     quit()
 
-for fileName in fileList:
-    print("+ Processing .vmt file: " + fileName)
-    baseFileName  = os.path.basename(fileName.replace('.vmt', ''))
+for vmtFileName in fileList:
+    print("+ Processing .vmt file: " + vmtFileName)
+    baseFileName  = os.path.basename(vmtFileName.replace('.vmt', ''))
     if modPath == "":
-        modPath = fileName.split('materials')[0]
+        modPath = vmtFileName.split('materials')[0]
     vmtParameters = {}
     vmtShader = ""
 
-    with open(fileName, 'r') as vmtFile:
+    vmatFileName = addFolderExtension(vmtFileName).replace('.vmt', '.vmat')
+    if os.path.exists(vmatFileName) and not OVERWRITE_VMAT:
+        print('+ WARNING: File already exists. Skipping!')
+        continue
+
+    basePath = 'materials' + vmtFileName.split('materials')[1].replace('.vmt', '')
+
+    with open(vmtFileName, 'r') as vmtFile:
         for line in vmtFile.readlines():
             if parseLine(line) in vmtSupportedShaders:
                 vmtShader = parseLine(line)
@@ -338,351 +379,268 @@ for fileName in fileList:
                 parseVMTParameter(line, vmtParameters)
 
         if vmtShader == "": # vmt shader not supported
-            print("- Unsupported shader in " + baseFileName + ". Skipping!")
+            print("- ERROR: Unsupported shader in " + baseFileName + ". Skipping!")
+            if debugPauseOnError:
+                input("Press the <ENTER> key to continue...")
             continue #skip!
 
-    texColor = RGBAImage((8, 8), (0,0,0,255))
-    texNormal = RGBAImage((8, 8), (0,0,0,255))
-    texRough = RGBAImage((8, 8), (0,0,0,255))
-    texAo = RGBAImage((8, 8), (0,0,0,255))
-    texSelfIllum = RGBAImage((8, 8), (0,0,0,255))
-    texMetal = RGBAImage((8, 8), (0,0,0,255))
-    texTrans = RGBAImage((8, 8), (0,0,0,255))
-    texDetail = RGBAImage((8, 8), (0, 0, 0, 255))
-    # not used by VR Complex for some reason, but we're keeping it here for legacy support
-    texRefl = RGBAImage((8, 8), (0,0,0,255))
-    texGloss = RGBAImage((8, 8), (0, 0, 0, 255))
+    print('+ Parsing ' + os.path.basename(vmtFileName))
 
-    vmatFileName = fileName.replace('.vmt', '') + '.vmat'
-    if os.path.exists(vmatFileName) and not OVERWRITE_VMAT:
-            print('+ File already exists. Skipping!')
-            continue
+    # HACK?: We use these sizes as default values to check against if a map has been updated or not.
+    # The only reason we do this is because, theoretically, checking a tuple against a value would
+    # be faster than reading through the vmtParameters and finding something was set. Although,
+    # I have not concluded this via scientific testing. If anyone wishes to prove me wrong,
+    # they can fight me in the schoolyard and then, only afterwords politely dm me about it.
+    baseMap = Image.new("RGB", (3, 3))
+    bumpMap = Image.new("RGB", (3, 3))
+    phongMap = Image.new("RGB", (3, 3))
+    phongExpMap = Image.new("RGB", (3, 3))
+    envMap = Image.new("RGB", (3, 3))
+    illumMap = Image.new("RGB", (3, 3))
+    transMap = Image.new("RGB", (3, 3))
+    aoMap = Image.new("RGB", (3, 3))
+    maskMap = Image.new("RGB", (3,3))
+    detailMap = Image.new("RGB", (3,3))
 
-    print('+ Creating ' + os.path.basename(vmatFileName))
-    with open(vmatFileName, 'w') as vmatFile:
-        vmatFile.write('// Converted with vmt_to_vmat.py\n\n')
-        vmatFile.write('Layer0\n{\n\tshader "' + SHADER + '.vfx"\n\n')
-
-        # Prep TextureColor
-        if "$basetexture" in vmtParameters:
-
-            tgaPath = modPath + "materials\\" + vmtParameters["$basetexture"] + ".tga"
-
-            baseTex = RGBAImage((8, 8), (0,0,0,255))
-            try:
-                baseTexture = Image.open(tgaPath)
-            except:
-                print("- ERROR: .tga file " + tgaPath + " does not exist. Ending texture conversion early.")
-                vmatFile.write('}\n')
-                continue
-
-            baseTex.r,baseTex.g,baseTex.b,baseTex.a = baseTexture.split()
-            baseTexture.close()
-            texSize = baseTex.a.size
-
-            texColor.resizeAll(texSize)
-            texColor = baseTex
+    # Prep TextureColor
+    if "$basetexture" in vmtParameters:
+        tgaPath = modPath + "materials\\" + parseVMTPath(vmtParameters["$basetexture"]) + ".tga"
+        try:
+            baseTexture = Image.open(tgaPath)
+            baseMap = baseTexture
 
             if "$basemapalphaphongmask" in vmtParameters:
-                texRough.resizeAll(texSize)
-                texRough.r = PIL.ImageOps.invert(baseTex.a)
-                texRough.g = PIL.ImageOps.invert(baseTex.a)
-                texRough.b = PIL.ImageOps.invert(baseTex.a)
-
+                phongMap = baseTexture.getchannel('A')
+            if "$basemapalphaenvmapmask" in vmtParameters:
+                envMap = baseTexture.getchannel('A')
             if "$selfillum" in vmtParameters and "$selfillummask" not in vmtParameters:
-                texSelfIllum.resizeAll(texSize)
-                texSelfIllum.setRGBA(baseTex.a)
-
+                illumMap = baseTexture.getchannel('A')
             if "$translucent" in vmtParameters or "$alphatest" in vmtParameters:
-                texTrans.resizeAll(texSize)
-                texTrans.setRGBA(baseTex.a)
-
+                transMap = baseTexture.getchannel('A')
             if "$basealphaenvmapmask" in vmtParameters:
-                texRefl.resizeAll(texSize)
-                texRefl.setRGBA(baseTex.a, True)
+                envMap = baseTexture.getchannel('A')
+            if "$blendtintbybasealpha" in vmtParameters:
+                maskMap = baseTexture.getchannel('A')
+        except:
+            print("- ERROR: $basetexture file " + parseVMTPath(vmtParameters["$basetexture"]) + " in TGA does not exist. Skipping!")
 
-            if "$color" in vmtParameters:
-                if "{" in vmtParameters["$color"]:
-                    vmatFile.write('\tg_vColorTint ' + fixVector(vmtParameters["$color"], 255) + '\n') #process as int
-                elif "[" in vmtParameters["$color"]:
-                    vmatFile.write('\tg_vColorTint ' + fixVector(vmtParameters["$color"]) + '\n') #process as float
-            elif "$color2" in vmtParameters:
-                if "{" in vmtParameters["$color2"]:
-                    vmatFile.write('\tg_vColorTint ' + fixVector(vmtParameters["$color2"], 255) + '\n') #process as int
-                elif "[" in vmtParameters["$color2"]:
-                    vmatFile.write('\tg_vColorTint ' + fixVector(vmtParameters["$color2"]) + '\n') #process as float
+    # Prep TextureNormal for normal/bump maps
+    if "$bumpmap" in vmtParameters or "$normalmap" in vmtParameters:
+        if "$bumpmap" in vmtParameters:
+            tgaPath = modPath + "materials\\" + parseVMTPath(vmtParameters["$bumpmap"]) + ".tga"
+        elif "$normalmap" in vmtParameters:
+            tgaPath = modPath + "materials\\" + parseVMTPath(vmtParameters["$normalmap"]) + ".tga"
 
-            texColor.saveFile(fileName.replace('.vmt', '_color.tga'))
-            vmatFile.write('\tTextureColor "' + 'materials' + fileName.split('materials')[1].replace('.vmt', '_color.tga') + '"\n')
-
-        # Prep TextureNormal for normal/bump maps
-        if "$bumpmap" in vmtParameters or "$normalmap" in vmtParameters:
-            if "$bumpmap" in vmtParameters:
-                tgaPath = modPath + "materials\\" + vmtParameters["$bumpmap"] + ".tga"
-            elif "$normalmap" in vmtParameters:
-                tgaPath = modPath + "materials\\" + vmtParameters["$normalmap"] + ".tga"
-
-            bumpTex = RGBAImage((8, 8), (0,0,0,255))
-            try:
-                bumpTexture = Image.open(tgaPath)
-            except:
-                print("- ERROR: .tga file " + tgaPath + " does not exist. Ending texture conversion early.")
-                vmatFile.write('}\n')
-                continue
-            bumpTex.r,bumpTex.g,bumpTex.b,bumpTex.a = bumpTexture.split()
-            bumpTexture.close()
-            texSize = bumpTex.a.size
-
-            texNormal.resizeAll(texSize)
-            texNormal = bumpTex
-
+        try:
+            bumpTexture = Image.open(tgaPath)
+            bumpMap = bumpTexture
             if "$basemapalphaphongmask" not in vmtParameters:
-                texRough.resizeAll(texSize)
-                texRough.r = PIL.ImageOps.invert(bumpTex.a)
-                texRough.g = PIL.ImageOps.invert(bumpTex.a)
-                texRough.b = PIL.ImageOps.invert(bumpTex.a)
+                phongMap = bumpTexture.getchannel("A")
 
             if "$normalmapalphaenvmapmask" in vmtParameters:
-                texRefl.resizeAll(texSize)
-                texRefl.setRGBA(bumpTex.a, False) # for some reason, normal map env masks seem reversed. HACKing for now
+                envMap = bumpTexture.getchannel("A")
+        except:
+            print("- ERROR: $bumpmap/$normalmap file " + tgaPath.split(modPath + "materials\\")[1] + " in TGA does not exist. Skipping!")
 
-            texNormal.saveFile(fileName.replace('.vmt', '_normal.tga'))
-            # For normal maps, we produce a file called fileName.txt that tells Source 2 to flip the green channel
-            bumpSettingsFileName = fileName.replace(".vmt", "_normal.txt")
-            with open(bumpSettingsFileName, 'w') as bumpSettings:
-                bumpSettings.write('"settings"\n'
-                                   '{\n'
-                                   '\t"legacy_source1_inverted_normal"\t"1"\n'
-                                   '}')
+    if "$envmap" in vmtParameters and "$envmapmask" in vmtParameters:
+        tgaPath = modPath + "materials\\" + parseVMTPath(vmtParameters["$envmapmask"]) + ".tga"
+        try:
+            envTexture = Image.open(tgaPath)
+            envMap = envTexture.convert("RGB")
+        except:
+            print("- ERROR: $envmapmask file " + parseVMTPath(vmtParameters["$envmapmask"]) + " in TGA does not exist. Skipping!")
 
-            vmatFile.write('\tTextureNormal "' + 'materials' + fileName.split('materials')[1].replace('.vmt', '_normal.tga') + '"\n')
+    # Prep Glossiness Map using Phong Exponent
+    if "$phongexponenttexture" in vmtParameters:
+        tgaPath = modPath + "materials\\" + parseVMTPath(vmtParameters["$phongexponenttexture"]) + ".tga"
+        try:
+            phongTexture = Image.open(tgaPath)
+            phongExpMap = phongTexture
+        except:
+            print("- ERROR: $phongexponenttexture file " + parseVMTPath(vmtParameters["$phongexponenttexture"]) + " in TGA does not exist. Skipping!")
 
-        # Prep TextureRoughness using phongmask details
-        if "$envmap" in vmtParameters:
-            vmatFile.write('\tF_SPECULAR 1\n')
+    # Prep TextureSelfIllum using selfillum stuff
+    if "$selfillum" in vmtParameters and "$selfillummask" in vmtParameters:
+        tgaPath = modPath + "materials\\" + parseVMTPath(vmtParameters["$selfillummask"]) + ".tga"
+        try:
+            illumTexture = Image.open(tgaPath)
+            illumMap = illumTexture
+        except:
+            print("- ERROR: $selfillummask file " + parseVMTPath(vmtParameters["$selfillummask"]) + " in TGA does not exist. Skipping!")
 
-        if "$phong" in vmtParameters and vmtParameters["$phong"] == "1":
-            vmatFile.write('\tF_SPECULAR 1\n')
-            vmatFile.write('\tg_vReflectanceRange "[0.000 ' + str(reflRange) + ']"\n')  # Sets the default "phong" value if none else available.
+    # Rarely used, but ambient occlusion maps are sometimes available
+    if "$ambientoccltexture" in vmtParameters or "$ambientocclusiontexture" in vmtParameters:
+        if "$ambientoccltexture" in vmtParameters:
+            tgaPath = modPath + "materials\\" + vmtParameters["$ambientoccltexture"] + ".tga"
+        elif "$ambientocclusiontexture" in vmtParameters:
+            tgaPath = modPath + "materials\\" + vmtParameters["$ambientocclusiontexture"] + ".tga"
+        try:
+            aoTexture = Image.open(tgaPath)
+            aoMap = aoTexture
+        except:
+            print("- ERROR: $ambientoccltexture/$ambientocclusiontexture file " + tgaPath.split(modPath + "materials\\")[1] + " in TGA does not exist. Skipping!")
 
-        # HACK
-        if texRough.r.size != (8, 8):
-            vmatFile.write('\tTextureRoughness "' + 'materials' + fileName.split('materials')[1].replace('.vmt', '_rough.tga') + '"\n')
-            texRough.saveFile(fileName.replace('.vmt', '_rough.tga'))
+    if SHADER == "vr_complex":
+        print('+ Creating ' + os.path.basename(vmatFileName))
+        with open(vmatFileName, 'w') as vmatFile:
+            # VMT Maps are now parsed. Moving onto creating the vmat!
+            vmatFile.write('// Converted with vmt_to_vmat.py\n\n')
+            vmatFile.write('Layer0\n{\n\tshader "' + SHADER + '.vfx"\n\n')
 
-        # This is a major HACK. Currently I don't know of any analogs for these commands, and
-        # the properties of their envmap masks cause severe headaches and bad looking models.
-        # My solution is to set metalness to 1.0 for models that take these commands. This is
-        # definately wrong, but it's doing well so far.
-        envMaskProblematicCommands = {
-            #"$envmapfresnel",
-            #"$envmapsaturation",
-            #"$envmapcontrast"
-        }
-        # Prep Reflectivity Map using Envmask
-        # TODO: Add functionality for all the weird envmap mask stuff
-        if "$envmap" in vmtParameters and not any(props in vmtParameters for props in envMaskProblematicCommands):
-            if "$envmapmask" in vmtParameters:
-                envmapTGA = modPath + "materials\\" + vmtParameters["$envmapmask"] + ".tga"
+            # move onto writing materials if they exist
+            # Prep TextureColor
+            if baseMap.size != (3,3):
+                if not OVERWRITE_TGA or OVERWRITE_TGA and not os.path.exists(vmatFileName.replace('.vmat', '_color.tga')):
+                    #baseMap.save(vmatFileName.replace('.vmat', '_color.tga'))
+                    baseMap.save(vmatFileName.replace('.vmat', '_color.tga'))
+                    print(os.path.basename(vmatFileName.replace('.vmat', '_color.tga')) + " saved!")
+                vmatFile.write('\tTextureColor "' + basePath + '_color.tga' + '"\n')
 
-                envTex = RGBAImage((8, 8), (0,0,0,255))
-                try:
-                    envTexture = Image.open(envmapTGA)
-                    print(envmapTGA)
-                except:
-                    print("- ERROR: .tga file " + envmapTGA + " does not exist. Ending texture conversion early.")
-                    vmatFile.write('}\n')
-                    continue
-                envTex.r,envTex.g,envTex.b,envTex.a = envTexture.split()
-                envTexture.close()
-                texSize = envTex.a.size
-
-                texRefl.resizeAll(texSize)
-
-                #texRefl.setRGBA(envTex.r, True)
-                texRefl.r = envTex.r
-                texRefl.g = envTex.g
-                texRefl.b = envTex.b
-                texRefl.a = envTex.a
-
-                if "$selfillum_envmapmask_alpha" in vmtParameters:
-                    texSelfIllum.resizeAll(texSize)
-                    texSelfIllum.setRGBA(envTex.a)
-
-            # HACK: Lots of things here that feel like hacks. Need to clean this up more. It's slowing the script down a ton.
-            tempEnv = Image.merge("RGBA", (texRefl.r, texRefl.g, texRefl.b, texRefl.a))
-            if "$envmapcontrast" in vmtParameters:
-                blendedTex = np.array(tempEnv)
-                blendedTex_float = blendedTex.astype(float)
-                opacity = float(vmtParameters["$envmapcontrast"])
-                blendedTex_float = blending_functions.multiply(blendedTex_float, blendedTex_float, opacity)
-                blendedTex = np.uint8(blendedTex_float)
-                tempEnv = Image.fromarray(blendedTex)
-
-            texRefl.r, texRefl.g, texRefl.b, texRefl.a = tempEnv.split()
-
-            # $envmaptint was used to tint the color of the envmap reflection. alternatively, it was also used to water down the
-            # effect of the reflection. so in this case, since S2 doesn't support tinted cubemaps, we are interpreting it as
-            # a flat number to be blended with the envmap, so that reflections look closer to their S2 counterparts when
-            # watered down.
-            tintAvg = 1
-            if "$envmaptint" in vmtParameters:
-                if "{" in vmtParameters["$envmaptint"]:
-                    envTint = vectorToArray(vmtParameters["$envmaptint"], 255)
+            # Prep TextureNormal for normal/bump maps
+            if bumpMap.size != (3,3):
+                if "$ssbump" in vmtParameters and "1" in vmtParameters["$ssbump"]:
+                    print("- WARNING: " + os.path.basename(vmtFileName) + " uses $ssbump, which is not supported in Source 2. Skipping normal maps.")
+                    vmatFile.write('\t// $ssbump in original .vmt used, which are unsupported in Source 2. Normal maps skipped to retain visual quality.')
                 else:
-                    envTint = vectorToArray(vmtParameters["$envmaptint"])
+                    if not OVERWRITE_TGA or OVERWRITE_TGA and not os.path.exists(vmatFileName.replace('.vmat', '_normal.tga')):
+                        bumpMap.save(vmatFileName.replace('.vmat', '_normal.tga'))
+                        print(os.path.basename(vmatFileName.replace('.vmat', '_normal.tga')) + " saved!")
+                        # For normal maps, we produce a file called fileName.txt that tells Source 2 to flip the green channel
+                        bumpSettingsFileName = vmatFileName.replace(".vmat", "_normal.txt")
+                        with open(bumpSettingsFileName, 'w') as bumpSettings:
+                            bumpSettings.write('"settings"\n'
+                                               '{\n'
+                                               '\t"legacy_source1_inverted_normal"\t"1"\n'
+                                               '}')
+                    vmatFile.write('\tTextureNormal "' + basePath + '_normal.tga' + '"\n')
 
-                tintAvg = sum(envTint) / len(envTint)
+            # Rarely used, but ambient occlusion maps are sometimes available
+            # However, since we use a hack in vr_complex for phong masks, we prioritize that over custom AO textures
+            if phongMap.size != (3, 3):
+                if not OVERWRITE_TGA or OVERWRITE_TGA and not os.path.exists(vmatFileName.replace('.vmat', '_ao.tga')):
+                    phongMap.save(vmatFileName.replace('.vmat', '_ao.tga'))
+                    print(os.path.basename(vmatFileName.replace('.vmat', '_ao.tga')) + " saved!")
+                vmatFile.write('\tg_vReflectanceRange "[0.000 ' + str(reflRange) + ']"\n')
+                vmatFile.write('\tTextureAmbientOcclusion "' + basePath + '_ao.tga' + '"\n')
+                vmatFile.write('\tg_flAmbientOcclusionDirectSpecular "1.000"\n')
+            elif envMap.size != (3, 3): # unsure if this is the correct way to handle this, will have to see how HLA truly handles cubemaps in materials
+                if not OVERWRITE_TGA or OVERWRITE_TGA and not os.path.exists(vmatFileName.replace('.vmat', '_ao.tga')):
+                    envMap.save(vmatFileName.replace('.vmat', '_ao.tga'))
+                    print(os.path.basename(vmatFileName.replace('.vmat', '_ao.tga')) + " saved!")
+                vmatFile.write('\tTextureAmbientOcclusion "' + basePath + '_ao.tga' + '"\n')
+                vmatFile.write('\tg_flAmbientOcclusionDirectSpecular "0.000"\n')
+            elif "$ambientoccltexture" in vmtParameters or "$ambientocclusiontexture" in vmtParameters:
+                if not OVERWRITE_TGA or OVERWRITE_TGA and not os.path.exists(vmatFileName.replace('.vmat', '_ao.tga')):
+                    aoMapConvert = aoMap.convert("L")
+                    aoMapConvert.save(vmatFileName.replace('.vmat', '_ao.tga'))
+                    print(os.path.basename(vmatFileName.replace('.vmat', '_ao.tga')) + " saved!")
+                vmatFile.write('\tTextureAmbientOcclusion "' + basePath + '_ao.tga' + '"\n')
 
-            vmatFile.write('\tg_vReflectanceRange "[0.000 ' + str(tintAvg * reflRange) + ']"\n')
+            # This value is a guess on comparing strengths of Phong exponent.
+            # https://developer.valvesoftware.com/wiki/Phong_materials
+            # My current theory is that $phongexponent's equvalent range (of usable numbers is 5-150 in Source 1)
+            # is an exponential value (duh) which lands between 60 and 255. I've produced a really quick and dirty
+            # expression with some online tools to help decide this, but we should probably find a cleaner solution.
+            # y = -10642.28 + (254.2042 - -10642.28)/(1 + (x/2402433000000)^0.1705696)
+            phongExpDivider = 150
+            if "$phong" in vmtParameters:
+                vmatFile.write('\tF_SPECULAR 1\n')
+                if phongExpMap.size != (3,3):
+                    if not OVERWRITE_TGA or OVERWRITE_TGA and not os.path.exists(vmatFileName.replace('.vmat', '_rough.tga')):
+                        phongExpMapFlip = phongExpMap.convert('RGB')
+                        phongExpMapFlip = PIL.ImageOps.invert(phongExpMapFlip)
+                        phongExpMapFlip.save(vmatFileName.replace('.vmat', '_rough.tga'))
+                        print(os.path.basename(vmatFileName.replace('.vmat', '_rough.tga')) + " saved!")
+                    vmatFile.write('\tTextureRoughness "' + basePath + '_rough.tga' + '"\n')
+                elif "$phongexponent" in vmtParameters:
+                    specValue = vmtParameters["$phongexponent"]
+                    finalSpec = (-10642.28 + (254.2042 - -10642.28)/(1 + (float(specValue)/2402433000000)**0.1705696))/255
+                    vmatFile.write('\tTextureRoughness "[' + str(finalSpec) + ' ' + str(finalSpec) + ' ' + str(finalSpec) + ' 0.000]"\n')
+                else: # VDC says the default value for $phongexponent is 5.0, but in my testing, I think it's actually 150, at least in SFM. TODO: Check this
+                    finalSpec = 60
+                    vmatFile.write('\tTextureRoughness "[' + str(finalSpec) + ' ' + str(finalSpec) + ' ' + str(finalSpec) + ' 0.000]"\n')
 
-            if not PBR_HACK:
-                vmatFile.write('\tF_SPECULAR_CUBE_MAP 1\n')
-                vmatFile.write('\tTextureReflectance "' + 'materials' + fileName.split('materials')[1].replace('.vmt', '_refl.tga') + '"\n')
+            # Prep TextureSelfIllum using selfillum stuff
+            if "$selfillum" in vmtParameters:
+                vmatFile.write('\tF_SELF_ILLUM 1\n')
+                vmatFile.write('\tTextureSelfIllumMask "' + basePath + '_selfillum.tga' + '"\n')
+                if "$selfillumtint" in vmtParameters:
+                    vmatFile.write('\tg_vSelfIllumTint ' + fixVector(vmtParameters["$selfillumtint"]) + '\n')
+                if "$selfillummaskscale" in vmtParameters:
+                    vmatFile.write('\tg_flSelfIllumScale "' + vmtParameters['$selfillummaskscale'] + '"\n')
+                if not OVERWRITE_TGA or OVERWRITE_TGA and not os.path.exists(vmatFileName.replace('.vmat', '_selfillum.tga')):
+                    illumMapConvert = illumMap.convert("L")
+                    illumMapConvert.save(vmatFileName.replace('.vmat', '_selfillum.tga'))
+                    print(os.path.basename(vmatFileName.replace('.vmat', '_selfillum.tga')) + " saved!")
 
-                texRefl.saveFile(fileName.replace('.vmt', '_refl.tga'))
+            # Prep TextureTransparancy using either alphatest or translucent
+            if "$translucent" in vmtParameters or "$alphatest" in vmtParameters:
+                if "$translucent" in vmtParameters:
+                    vmatFile.write('\tF_TRANSLUCENT 1\n')
+                elif "$alphatest" in vmtParameters:
+                    vmatFile.write('\tF_ALPHA_TEST 1\n')
+                if "$additive" in vmtParameters:
+                    vmatFile.write('\tF_ADDITIVE_BLEND 1\n')
+                if not OVERWRITE_TGA or OVERWRITE_TGA and not os.path.exists(vmatFileName.replace('.vmat', '_trans.tga')):
+                    transMapConvert = transMap.convert("L")
+                    transMapConvert.save(vmatFileName.replace('.vmat', '_trans.tga'))
+                    print(os.path.basename(vmatFileName.replace('.vmat', '_trans.tga')) + " saved!")
+                vmatFile.write('\tTextureTranslucency "' + basePath + '_trans.tga' + '"\n')
 
-        '''if "$surfaceprop" in vmtParameters:
-            if "metal" in vmtParameters["$surfaceprop"]:
-                vmatFile.write('\tg_flMetalness "1.000"\n')'''
+            # Setting up Color Tint
+            if "$color" in vmtParameters:
+                if "{" in vmtParameters["$color"]:
+                    vmatFile.write('\tg_vColorTint ' + fixVector(vmtParameters["$color"], 255) + '\n')  # process as int
+                elif "[" in vmtParameters["$color"]:
+                    vmatFile.write('\tg_vColorTint ' + fixVector(vmtParameters["$color"]) + '\n')  # process as float
+            elif "$color2" in vmtParameters:
+                # $blendtintbybasealpha does what it says on the tin, and is used by TF to tint items for team colors
+                if "$blendtintbybasealpha" in vmtParameters:
+                    if not OVERWRITE_TGA or OVERWRITE_TGA and not os.path.exists(vmatFileName.replace('.vmat', '_colormask.tga')):
+                        maskMapConvert = maskMap.convert("L")
+                        maskMapConvert.save(vmatFileName.replace('.vmat', '_colormask.tga'))
+                        print(os.path.basename(vmatFileName.replace('.vmat', '_colormask.tga')) + " saved!")
+                        vmatFile.write('\tF_TINT_MASK 1\n\tTextureTintMask "' + basePath + '_colormask.tga' + '"\n')
+                if "{" in vmtParameters["$color2"]:
+                    vmatFile.write('\tg_vColorTint ' + fixVector(vmtParameters["$color2"], 255) + '\n')  # process as int
+                elif "[" in vmtParameters["$color2"]:
+                    vmatFile.write('\tg_vColorTint ' + fixVector(vmtParameters["$color2"]) + '\n')  # process as float
 
-        # Prep Glossiness Map using Phong Exponent
-        if "$phongexponenttexture" in vmtParameters and "$phongexponent" not in vmtParameters:
-            phongExpTGA = modPath + "materials\\" + vmtParameters["$phongexponenttexture"] + ".tga"
+            # Setting up Detail Parameters
+            if "$detail" in vmtParameters:
+                # Detail textures are unique since they're almost always shared with other materials,
+                # So in this case we just copy it once and then continue to process like normal
+                tgaPath = modPath + "materials\\" + parseVMTPath(vmtParameters["$detail"]) + ".tga"
+                if not os.path.exists(addFolderExtension(tgaPath)):
+                    try:
+                        copyfile(tgaPath, addFolderExtension(tgaPath))
+                        print("+ " + addFolderExtension(tgaPath) + " copied to target directory!")
+                    except:
+                        print("- ERROR: $detail file " + parseVMTPath(vmtParameters["$detail"]) + " in TGA does not exist. Skipping!")
 
-            phongTex = RGBAImage((8, 8), (0, 0, 0, 255))
-            try:
-                phongTexture = Image.open(phongExpTGA)
-            except:
-                print("- ERROR: .tga file " + phongExpTGA + " does not exist. Ending texture conversion early.")
-                vmatFile.write('}\n')
-                continue
-            phongTex.r, phongTex.g, phongTex.b, phongTex.a = phongTexture.split()
-            phongTexture.close()
-            texGloss.resizeAll(phongTex.r.size)
+                vmatFile.write('\tTextureDetail "' + 'materials/' + parseVMTPath(vmtParameters["$detail"]) + '.tga"\n')
+                if "$detailblendmode" in vmtParameters:
+                    vmatFile.write('\tF_DETAIL_TEXTURE 2\n')  # Overlay
+                else:
+                    vmatFile.write('\tF_DETAIL_TEXTURE 1\n')  # Mod2X
+                if "$detailscale" in vmtParameters:
+                    vmatFile.write('\tg_vDetailTexCoordScale "[' + vmtParameters["$detailscale"] + ' ' + vmtParameters["$detailscale"] + ']"\n')
+                if "$detailblendfactor" in vmtParameters:
+                    vmatFile.write('\tg_flDetailBlendFactor "' + vmtParameters["$detailblendfactor"] + '"\n')
 
-            texGloss.r = phongTex.r
-            texGloss.g = phongTex.g
-            texGloss.b = phongTex.b
-            texGloss.a = phongTex.a
 
-            if not PBR_HACK:
-                vmatFile.write('\tTextureGlossiness "' + 'materials' + fileName.split('materials')[1].replace('.vmt', '_gloss.tga') + '"\n')
-                texGloss.saveFile(fileName.replace('.vmt', '_gloss.tga'))
-        elif "$phongexponent" in vmtParameters:
-            specValue2 = vmtParameters["$phongexponent"]
-            specValue = float(specValue2)/150
-            vmatFile.write('\tTextureGlossiness "[' + str(specValue) + ' ' + str(specValue) + ' ' + str(specValue) + ' 0.000]"\n')
-            #texGloss.saveFile(fileName.replace('.vmt', '_gloss.tga'))
-        elif "$phong" in vmtParameters and "$phongexponent" not in vmtParameters and "$phongexponenttexture" not in vmtParameters:
-            vmatFile.write('\tTextureGlossiness "[0.033000 0.033000 0.033000 0.000000]"\n')
-            #texGloss.saveFile(fileName.replace('.vmt', '_gloss.tga'))
+            vmatFile.write('}\n')
 
-        # Prep TextureSelfIllum using selfillum stuff
-        if "$selfillum" in vmtParameters:
-            if "$selfillummask" in vmtParameters:
-                tgaPath = modPath + "materials\\" + vmtParameters["$selfillummask"] + ".tga"
-                illumTex = RGBAImage((8, 8), (0,0,0,255))
-                try:
-                    illumTexture = Image.open(tgaPath)
-                except:
-                    print("- ERROR: .tga file " + tgaPath + " does not exist. Ending texture conversion early.")
-                    vmatFile.write('}\n')
-                    continue
-                illumTex.r,illumTex.g,illumTex.b,illumTex.a = illumTexture.split()
-                illumTexture.close()
-                texSize = illumTex.r.size
-
-                texSelfIllum.resizeAll(texSize)
-                texSelfIllum.r = illumTex.r
-                texSelfIllum.g = illumTex.g
-                texSelfIllum.b = illumTex.b
-
-            vmatFile.write('\tF_SELF_ILLUM 1\n')
-            vmatFile.write('\tTextureSelfIllumMask "' + 'materials' + fileName.split('materials')[1].replace('.vmt', '_selfillum.tga') + '"\n')
-            if "$selfillumtint" in vmtParameters:
-                vmatFile.write('\tg_vSelfIllumTint ' + fixVector(vmtParameters["$selfillumtint"]) + '\n')
-            if "$selfillummaskscale" in vmtParameters:
-                vmatFile.write('\tg_flSelfIllumScale "' + vmtParameters['$selfillummaskscale'] + '"\n')
-            texSelfIllum.saveFile(fileName.replace('.vmt', '_selfillum.tga'))
-
-        # Prep Details stuff
-        if "$detail" in vmtParameters:
-            vmatFile.write('\tTextureDetail "' + 'materials/' + vmtParameters["$detail"].replace('.vtf', '') + '.tga"\n')
-            if "$detailblendmode" in vmtParameters and vmtParameters["$detailblendmode"] == "1":
-                vmatFile.write('\tF_DETAIL_TEXTURE 2\n') # Overlay
-            else:
-                vmatFile.write('\tF_DETAIL_TEXTURE 1\n') # Mod2X
-            if "$detailscale" in vmtParameters:
-                vmatFile.write('\tg_vDetailTexCoordScale "[' + vmtParameters["$detailscale"] + ' ' + vmtParameters["$detailscale"] + ']"\n')
-            if "$detailblendfactor" in vmtParameters:
-                vmatFile.write('\tg_flDetailBlendFactor "' + vmtParameters["$detailblendfactor"] + '"\n')
-
-        # Prep TextureTransparancy using either alphatest or translucent
-        if "$translucent" in vmtParameters or "$alphatest" in vmtParameters:
-            if "$translucent" in vmtParameters:
-                vmatFile.write('\tF_TRANSLUCENT 1\n')
-            elif "$alphatest" in vmtParameters:
-                vmatFile.write('\tF_ALPHA_TEST 1\n')
-            if "$additive" in vmtParameters:
-                vmatFile.write('\tF_ADDITIVE_BLEND 1\n')
-            vmatFile.write('\tTextureTranslucency "' + 'materials' + fileName.split('materials')[1].replace('.vmt', '_trans.tga') + '"\n')
-            texTrans.saveFile(fileName.replace('.vmt', '_trans.tga'))
-
-        # Rarely used, but ambient occlusion maps are sometimes available
-        if "$ambientoccltexture" in vmtParameters or "$ambientocclusiontexture" in vmtParameters:
-            if "$ambientoccltexture" in vmtParameters:
-                tgaPath = modPath + "materials\\" + vmtParameters["$ambientoccltexture"] + ".tga"
-            elif "$ambientocclusiontexture" in vmtParameters:
-                tgaPath = modPath + "materials\\" + vmtParameters["$ambientocclusiontexture"] + ".tga"
-
-            aoTex = RGBAImage((8, 8), (0,0,0,255))
-            try:
-                aoTexture = Image.open(tgaPath)
-            except:
-                print("- ERROR: .tga file " + tgaPath + " does not exist. Ending texture conversion early.")
-                vmatFile.write('}\n')
-                continue
-            aoTex.r,aoTex.g,aoTex.b,aoTex.a = aoTexture.split()
-            aoTexture.close()
-            texSize = aoTex.a.size
-
-            texAo.resizeAll(texSize)
-            texAo = aoTex
-
-            texAo.saveFile(fileName.replace('.vmt', '_ao.tga'))
-            vmatFile.write('\tTextureAmbientOcclusion "' + 'materials' + fileName.split('materials')[1].replace('.vmt', '_ao.tga') + '"\n')
-
-        vmatFile.write('}\n')
+    elif SHADER == "vr_standard":
+        # die
+        print("die in real")
+    elif SHADER == "globallitsimple":
+        # die 2.0
+        print("die in real for real")
+    elif SHADER == "customhero":
+        # die 3: the finale
+        print("death death death death death")
 
     print('+ Finished Writing ' + vmatFileName)
 
-    '''
-    if "$basetexture" in vmtParameters:
-        vtfPath = modPath + "materials\\" + vmtParameters["$basetexture"] + ".vtf"
-        #if os.path.exists(vtfPath):
-        vtf_lib.image_load(vtfPath)
-        if vtf_lib.image_is_loaded():
-            print('Image loaded successfully')
-            
-            rgba_data = vtf_lib.convert_to_rgba8888()
-            pixels = np.array(rgba_data.contents, np.uint8)
-            pixels = pixels.astype(np.uint8, copy=False)
-            
-            #testImage = Image.new("RGBA", (vtf_lib.width(), vtf_lib.height()))
-            print (pixels.size)
-            pixels = Image.fromarray(pixels, "RGBA")
-            pixels.save(baseFileName + "_color.tga")
-            print(pixels)
-            #texColor = rgba_data
-            #texColor.save(baseFileName + "_color.tga")'''
-    '''texColor.save(os.path.basename(fileName.replace('.vmt', '')) + "_color.tga")
-    texNormal.save(os.path.basename(fileName.replace('.vmt', '')) + "_normal.tga")
-    texRough.save(os.path.basename(fileName.replace('.vmt', '')) + "_rough.tga")
-    texAo.save(os.path.basename(fileName.replace('.vmt', '')) + "_ao.tga")
-    texSelfIllum.save(os.path.basename(fileName.replace('.vmt', '')) + "_selfIllum.tga")
-    texMetal.save(os.path.basename(fileName.replace('.vmt', '')) + "_metal.tga")
-    texTrans.save(os.path.basename(fileName.replace('.vmt', '')) + "_trans.tga")
-    texRefl.save(os.path.basename(fileName.replace('.vmt', '')) + "_refl.tga")
-    texDetail.save(os.path.basename(fileName.replace('.vmt', '')) + "_detail.tga")'''
-
+input("Press the <ENTER> key to close...")
