@@ -81,7 +81,7 @@ for filename in files:
 
     out = sys.stdout
 
-    sourcePath = "models" + filename.split("models")[1] # HACK?
+    sourcePath = "models" + filename.split("models", 1)[1] # HACK?
     mdl_path = fix_path(sourcePath)
     
     with open(out_name, 'w') as out:

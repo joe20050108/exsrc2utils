@@ -88,3 +88,11 @@ utils/VTFLibWrapper/VTFLibConstants.py
 utils/VTFLibWrapper/VTFLibEnums.py
 utils/VTFLibWrapper/VTFLibStructures.py
 utils/mdl_to_vmdl.spec
+utils/dist/mdl_to_vmdl.exe
+utils/dist/vmt_to_vmat.exe
+utils/VTFLibWrapper/bin/libVTFLib13.so
+utils/VTFLibWrapper/bin/libtxc_dxtn.so
+utils/VTFLibWrapper/__pycache__/VTFLibStructures.cpython-38.pyc
+utils/VTFLibWrapper/__pycache__/VTFLibEnums.cpython-38.pyc
+utils/VTFLibWrapper/__pycache__/VTFLibConstants.cpython-38.pyc
+utils/VTFLibWrapper/__pycache__/VTFLib.cpython-38.pyc

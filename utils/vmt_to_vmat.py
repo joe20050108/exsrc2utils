@@ -369,7 +369,7 @@ for vmtFileName in fileList:
         print('+ WARNING: File already exists. Skipping!')
         continue
 
-    basePath = 'materials' + vmtFileName.split('materials')[1].replace('.vmt', '')
+    basePath = 'materials' + vmtFileName.split('materials', 1)[1].replace('.vmt', '')
 
     with open(vmtFileName, 'r') as vmtFile:
         for line in vmtFile.readlines():
@@ -505,13 +505,13 @@ for vmtFileName in fileList:
                     if not OVERWRITE_TGA or OVERWRITE_TGA and not os.path.exists(vmatFileName.replace('.vmat', '_normal.tga')):
                         bumpMap.save(vmatFileName.replace('.vmat', '_normal.tga'))
                         print(os.path.basename(vmatFileName.replace('.vmat', '_normal.tga')) + " saved!")
-                        # For normal maps, we produce a file called fileName.txt that tells Source 2 to flip the green channel
-                        bumpSettingsFileName = vmatFileName.replace(".vmat", "_normal.txt")
-                        with open(bumpSettingsFileName, 'w') as bumpSettings:
-                            bumpSettings.write('"settings"\n'
-                                               '{\n'
-                                               '\t"legacy_source1_inverted_normal"\t"1"\n'
-                                               '}')
+                    # For normal maps, we produce a file called fileName.txt that tells Source 2 to flip the green channel
+                    bumpSettingsFileName = vmatFileName.replace(".vmat", "_normal.txt")
+                    with open(bumpSettingsFileName, 'w') as bumpSettings:
+                        bumpSettings.write('"settings"\n'
+                                           '{\n'
+                                           '\t"legacy_source1_inverted_normal"\t"1"\n'
+                                           '}')
                     vmatFile.write('\tTextureNormal "' + basePath + '_normal.tga' + '"\n')
 
             # Rarely used, but ambient occlusion maps are sometimes available
@@ -520,6 +520,14 @@ for vmtFileName in fileList:
                 if not OVERWRITE_TGA or OVERWRITE_TGA and not os.path.exists(vmatFileName.replace('.vmat', '_ao.tga')):
                     phongMap.save(vmatFileName.replace('.vmat', '_ao.tga'))
                     print(os.path.basename(vmatFileName.replace('.vmat', '_ao.tga')) + " saved!")
+                if "$phongboost" in vmtParameters:
+                    # For phong boost, we scale brightness of the roughness/phong map which seems to be a 1:1 ratio
+                    aoSettingsFileName = vmatFileName.replace(".vmat", "_ao.txt")
+                    with open(aoSettingsFileName, 'w') as aoSettings:
+                        aoSettings.write('"settings"\n'
+                                           '{\n'
+                                           '\t"brightness"\t"' + vmtParameters["$phongboost"] + '"\n'
+                                           '}')
                 vmatFile.write('\tg_vReflectanceRange "[0.000 ' + str(reflRange) + ']"\n')
                 vmatFile.write('\tTextureAmbientOcclusion "' + basePath + '_ao.tga' + '"\n')
                 vmatFile.write('\tg_flAmbientOcclusionDirectSpecular "1.000"\n')
