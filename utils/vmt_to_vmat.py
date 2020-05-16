@@ -282,7 +282,7 @@ no = {'no','n', ''}
 validS2Shaders = {'vr_complex','vr_standard'}
 convertVTFs = False
 
-targetFolder = input("What folder would you like to convert? Valid Format: C:\\Steam\\steamapps\\Half-Life Alyx\\content\\tf: ").lower()
+targetFolder = input("What folder would you like to convert? Valid Format: C:\\Steam\\steamapps\\Half-Life Alyx\\content\\tf\\materials: ").lower()
 if not os.path.exists(targetFolder):
     print("Please respond with a valid folder or file path! Quitting Process!")
     quit()
@@ -434,7 +434,7 @@ for vmtFileName in fileList:
         try:
             bumpTexture = Image.open(tgaPath)
             bumpMap = bumpTexture
-            if "$basemapalphaphongmask" not in vmtParameters:
+            if "$basemapalphaphongmask" in vmtParameters:
                 phongMap = bumpTexture.getchannel("A")
 
             if "$normalmapalphaenvmapmask" in vmtParameters:
