@@ -500,7 +500,7 @@ for vmtFileName in fileList:
             if bumpMap.size != (3,3):
                 if "$ssbump" in vmtParameters and "1" in vmtParameters["$ssbump"]:
                     print("- WARNING: " + os.path.basename(vmtFileName) + " uses $ssbump, which is not supported in Source 2. Skipping normal maps.")
-                    vmatFile.write('\t// $ssbump in original .vmt used, which are unsupported in Source 2. Normal maps skipped to retain visual quality.')
+                    vmatFile.write('\t// $ssbump in original .vmt used, which are unsupported in Source 2. Normal maps skipped to retain visual quality.\n')
                 else:
                     if not OVERWRITE_TGA or OVERWRITE_TGA and not os.path.exists(vmatFileName.replace('.vmat', '_normal.tga')):
                         bumpMap.save(vmatFileName.replace('.vmat', '_normal.tga'))
@@ -513,7 +513,7 @@ for vmtFileName in fileList:
                                            '\t"legacy_source1_inverted_normal"\t"1"\n'
                                            '}')
                     vmatFile.write('\tTextureNormal "' + basePath + '_normal.tga' + '"\n')
-
+            
             # Rarely used, but ambient occlusion maps are sometimes available
             # However, since we use a hack in vr_complex for phong masks, we prioritize that over custom AO textures
             if phongMap.size != (3, 3):
@@ -543,7 +543,7 @@ for vmtFileName in fileList:
                     aoMapConvert.save(vmatFileName.replace('.vmat', '_ao.tga'))
                     print(os.path.basename(vmatFileName.replace('.vmat', '_ao.tga')) + " saved!")
                 vmatFile.write('\tTextureAmbientOcclusion "' + basePath + '_ao.tga' + '"\n')
-
+            
             # This value is a guess on comparing strengths of Phong exponent.
             # https://developer.valvesoftware.com/wiki/Phong_materials
             # My current theory is that $phongexponent's equvalent range (of usable numbers is 5-150 in Source 1)
@@ -567,7 +567,7 @@ for vmtFileName in fileList:
                 else: # VDC says the default value for $phongexponent is 5.0, but in my testing, I think it's actually 150, at least in SFM. TODO: Check this
                     finalSpec = 60
                     vmatFile.write('\tTextureRoughness "[' + str(finalSpec) + ' ' + str(finalSpec) + ' ' + str(finalSpec) + ' 0.000]"\n')
-
+            
             # Prep TextureSelfIllum using selfillum stuff
             if "$selfillum" in vmtParameters:
                 vmatFile.write('\tF_SELF_ILLUM 1\n')
@@ -635,7 +635,6 @@ for vmtFileName in fileList:
                     vmatFile.write('\tg_vDetailTexCoordScale "[' + vmtParameters["$detailscale"] + ' ' + vmtParameters["$detailscale"] + ']"\n')
                 if "$detailblendfactor" in vmtParameters:
                     vmatFile.write('\tg_flDetailBlendFactor "' + vmtParameters["$detailblendfactor"] + '"\n')
-
 
             vmatFile.write('}\n')
 
