@@ -5,9 +5,6 @@ import re, sys, os
 
 INPUT_FILE_EXT = '.mdl'
 OUTPUT_FILE_EXT = '.vmdl'
-# this leads to the root of the game folder, i.e. dota 2 beta/content/dota_addons/, make sure to remember the final slash!!
-PATH_TO_GAME_CONTENT_ROOT = ""
-PATH_TO_CONTENT_ROOT = ""
     
 VMDL_BASE = '''<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:generic:version{7412167c-06e9-4698-aff2-e63eb59037e7} -->
 {
@@ -35,21 +32,6 @@ def walk_dir(dirname):
             
     return files
 
-abspath = ''
-files = []
-globalVars = text_parser("global_vars.txt", " = ")
-PATH_TO_GAME_CONTENT_ROOT = globalVars["gameContentRoot"]
-PATH_TO_CONTENT_ROOT = PATH_TO_GAME_CONTENT_ROOT + sys.argv[1] + "/"
-print(PATH_TO_CONTENT_ROOT)
-
-# recursively search all dirs and files
-abspath = os.path.abspath(PATH_TO_CONTENT_ROOT)
-if os.path.isdir(abspath):
-    files.extend(walk_dir(abspath))
-#else:
-#    if abspath.lower().endswith(INPUT_FILE_EXT):
-#        files.append(abspath)
-
 def putl(f, line, indent = 0):
     f.write(('\t' * indent) + line + '\r\n')
 
@@ -69,23 +51,40 @@ def relative_path(s, base):
 def get_mesh_name(file):
     return os.path.splitext(os.path.basename(fix_path(file)))[0]
 
-if(PATH_TO_GAME_CONTENT_ROOT == ""):
-    print("ERROR: Please open vmt_to_vmat in your favorite text editor, and modify PATH_TO_GAME_CONTENT_ROOT to lead to your games content files (i.e. ...\steamvr_environments\content\steamtours_addons\)")
-    quit()
-    
+print('--------------------------------------------------------------------------------------------------------')
 print('Source 2 VMDL Generator! By Rectus via Github.')
 print('Initially forked by Alpyne, this version by caseytube.')
 print('--------------------------------------------------------------------------------------------------------')
+print('Reminder to put your models in the same directory structure as Source 1, starting with models!\n')
+abspath = ''
+files = []
+
+PATH_TO_CONTENT_ROOT = input("What folder would you like to convert? Valid Format: C:\\Steam\\steamapps\\Half-Life Alyx\\content\\tf\\models\\props_spytech\\: ").lower()
+if not os.path.exists(PATH_TO_CONTENT_ROOT):
+    print("Please respond with a valid folder or file path! Quitting Process!")
+    quit()
+
+# recursively search all dirs and files
+abspath = os.path.abspath(PATH_TO_CONTENT_ROOT)
+print(abspath)
+if os.path.isdir(abspath):
+    files.extend(walk_dir(abspath))
+#else:
+#    if abspath.lower().endswith(INPUT_FILE_EXT):
+#        files.append(abspath)
 
 for filename in files:
     out_name = filename.replace(INPUT_FILE_EXT, OUTPUT_FILE_EXT)
-    if os.path.exists(out_name): continue
+    #if os.path.exists(out_name): continue
 
     print('Importing', os.path.basename(filename))
 
     out = sys.stdout
-    
-    mdl_path = fix_path(filename.replace(abspath, ""))
+
+    sourcePath = "models" + filename.split("models", 1)[1] # HACK?
+    mdl_path = fix_path(sourcePath)
     
     with open(out_name, 'w') as out:
         putl(out, VMDL_BASE.replace('<mdl>', mdl_path).replace((' ' * 4), '\t'))
+
+input("Press the <ENTER> key to close...")
