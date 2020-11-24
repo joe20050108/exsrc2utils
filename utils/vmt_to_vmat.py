@@ -385,22 +385,21 @@ for vmtFileName in fileList:
             continue #skip!
 
     print('+ Parsing ' + os.path.basename(vmtFileName))
-
-    # HACK?: We use these sizes as default values to check against if a map has been updated or not.
-    # The only reason we do this is because, theoretically, checking a tuple against a value would
-    # be faster than reading through the vmtParameters and finding something was set. Although,
-    # I have not concluded this via scientific testing. If anyone wishes to prove me wrong,
-    # they can fight me in the schoolyard and then, only afterwords politely dm me about it.
-    baseMap = Image.new("RGB", (3, 3))
-    bumpMap = Image.new("RGB", (3, 3))
-    phongMap = Image.new("RGB", (3, 3))
-    phongExpMap = Image.new("RGB", (3, 3))
-    envMap = Image.new("RGB", (3, 3))
-    illumMap = Image.new("RGB", (3, 3))
-    transMap = Image.new("RGB", (3, 3))
-    aoMap = Image.new("RGB", (3, 3))
-    maskMap = Image.new("RGB", (3,3))
-    detailMap = Image.new("RGB", (3,3))
+    
+    # default image, to later check if we actually found something 
+    nullImage = Image.new("RGB", (4, 4))
+    nullImage.info['is_null'] = True
+    
+    baseMap = nullImage
+    bumpMap = nullImage
+    phongMap = nullImage
+    phongExpMap = nullImage
+    envMap = nullImage
+    illumMap = nullImage
+    transMap = nullImage
+    aoMap = nullImage
+    maskMap = nullImage
+    detailMap = nullImage
 
     # Prep TextureColor
     if "$basetexture" in vmtParameters:
@@ -489,7 +488,7 @@ for vmtFileName in fileList:
 
             # move onto writing materials if they exist
             # Prep TextureColor
-            if baseMap.size != (3,3):
+            if 'is_null' not in baseMap.info:
                 if not OVERWRITE_TGA or OVERWRITE_TGA and not os.path.exists(vmatFileName.replace('.vmat', '_color.tga')):
                     #baseMap.save(vmatFileName.replace('.vmat', '_color.tga'))
                     baseMap.save(vmatFileName.replace('.vmat', '_color.tga'))
@@ -497,7 +496,7 @@ for vmtFileName in fileList:
                 vmatFile.write('\tTextureColor "' + basePath + '_color.tga' + '"\n')
 
             # Prep TextureNormal for normal/bump maps
-            if bumpMap.size != (3,3):
+            if 'is_null' not in bumpMap.info:
                 if "$ssbump" in vmtParameters and "1" in vmtParameters["$ssbump"]:
                     print("- WARNING: " + os.path.basename(vmtFileName) + " uses $ssbump, which is not supported in Source 2. Skipping normal maps.")
                     vmatFile.write('\t// $ssbump in original .vmt used, which are unsupported in Source 2. Normal maps skipped to retain visual quality.\n')
@@ -516,7 +515,7 @@ for vmtFileName in fileList:
             
             # Rarely used, but ambient occlusion maps are sometimes available
             # However, since we use a hack in vr_complex for phong masks, we prioritize that over custom AO textures
-            if phongMap.size != (3, 3):
+            if 'is_null' not in phongMap.info:
                 if not OVERWRITE_TGA or OVERWRITE_TGA and not os.path.exists(vmatFileName.replace('.vmat', '_ao.tga')):
                     phongMap.save(vmatFileName.replace('.vmat', '_ao.tga'))
                     print(os.path.basename(vmatFileName.replace('.vmat', '_ao.tga')) + " saved!")
@@ -531,7 +530,7 @@ for vmtFileName in fileList:
                 vmatFile.write('\tg_vReflectanceRange "[0.000 ' + str(reflRange) + ']"\n')
                 vmatFile.write('\tTextureAmbientOcclusion "' + basePath + '_ao.tga' + '"\n')
                 vmatFile.write('\tg_flAmbientOcclusionDirectSpecular "1.000"\n')
-            elif envMap.size != (3, 3): # unsure if this is the correct way to handle this, will have to see how HLA truly handles cubemaps in materials
+            elif 'is_null' not in envMap.info: # unsure if this is the correct way to handle this, will have to see how HLA truly handles cubemaps in materials
                 if not OVERWRITE_TGA or OVERWRITE_TGA and not os.path.exists(vmatFileName.replace('.vmat', '_ao.tga')):
                     envMap.save(vmatFileName.replace('.vmat', '_ao.tga'))
                     print(os.path.basename(vmatFileName.replace('.vmat', '_ao.tga')) + " saved!")
@@ -553,7 +552,7 @@ for vmtFileName in fileList:
             phongExpDivider = 150
             if "$phong" in vmtParameters:
                 vmatFile.write('\tF_SPECULAR 1\n')
-                if phongExpMap.size != (3,3):
+                if 'is_null' not in phongExpMap.info:
                     if not OVERWRITE_TGA or OVERWRITE_TGA and not os.path.exists(vmatFileName.replace('.vmat', '_rough.tga')):
                         phongExpMapFlip = phongExpMap.convert('RGB')
                         phongExpMapFlip = PIL.ImageOps.invert(phongExpMapFlip)
