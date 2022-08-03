@@ -1,6 +1,8 @@
 ***HEY! These utilities are still broken in a lot of ways and will fail very often. Please use with the understanding that it doesn't perfectly convert files yet and will only go through certain texture sets perfectly.***
 
-# source2utils
+# exsrc2utils
+Extended Source 2 Utils
+- Attempt to improve and add on to the source2utils project.
 
 This is a 3rd generation fork, first created by Rectus and then Forked by Alpyne and Caseytube. These are a set of scripts to help convert Source 1 assets to Source 2 with ease, partly using the tools Valve already have available, and using a materials script that takes a lot of guesswork. These tools were intended to be used with the Source 2 Filmmaker, but can be applied to any Source 2 project.
 
